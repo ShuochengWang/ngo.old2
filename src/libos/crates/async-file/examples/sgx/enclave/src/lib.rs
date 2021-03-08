@@ -35,7 +35,7 @@ use sgx_trts::libc;
 use sgx_types::*;
 use std::prelude::v1::*;
 
-include!("../../../common.in");
+include!("../../../common/common.rs");
 
 #[no_mangle]
 pub extern "C" fn run_sgx_example() -> sgx_status_t {

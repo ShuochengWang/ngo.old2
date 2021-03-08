@@ -1,8 +1,7 @@
-include!("common.in");
+include!("common/common.rs");
 
 fn main() {
     init_async_rt();
 
     seq_read_write();
-    // libc_seq_read_write();
 }
