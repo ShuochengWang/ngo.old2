@@ -37,10 +37,8 @@ use std::{
 };
 
 pub use crate::io::IoUringProvider;
-use crate::{
-    io::{Acceptor, Common, Connector, Receiver, Sender},
-    poll::{Events, Poller},
-};
+use crate::io::{Acceptor, Common, Connector, Receiver, Sender};
+pub use crate::poll::{Events, Poller};
 
 /// A IPv4 stream socket with async APIs.
 pub struct Socket<P: IoUringProvider> {
@@ -64,8 +62,8 @@ enum State<P: IoUringProvider> {
 
 // Implementation for Socket
 
-pub const DEFAULT_SEND_BUF_SIZE: usize = 16 * 1024;
-pub const DEFAULT_RECV_BUF_SIZE: usize = 16 * 1024;
+pub const DEFAULT_SEND_BUF_SIZE: usize = 65 * 1024;
+pub const DEFAULT_RECV_BUF_SIZE: usize = 65 * 1024;
 
 impl<P: IoUringProvider> Socket<P> {
     /// Create a new instance.
