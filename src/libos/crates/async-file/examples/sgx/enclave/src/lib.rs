@@ -44,7 +44,7 @@ pub extern "C" fn run_sgx_example() -> sgx_status_t {
 
     init_async_rt();
 
-    seq_read_write();
+    test_read_write();
 
     sgx_status_t::SGX_SUCCESS
 }
