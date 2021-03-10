@@ -3,12 +3,21 @@ use async_file::*;
 use std::time::Instant;
 
 const CACHE_SIZE: usize = 1024 * 50; // 4 MB * 50
+// const CACHE_SIZE: usize = 100;
 const FILE_LEN: usize = 1024 * 1024 * 100;
 const FILE_NUM: usize = 1;
 const BLOCK_SIZE: usize = 4096 * 8;
-const LOOPS: usize = 1;
+const LOOPS: usize = 100;
 const USE_FLUSH: bool = false;
 const USE_O_DIRECT: bool = false;
+
+#[derive(Debug)]
+enum IoType {
+    SEQ_READ,
+    SEQ_WRITE,
+    RND_READ,
+    RND_WRITE,
+}
 
 static mut SEED: u32 = 0;
 fn get_random() -> u32 {
@@ -43,158 +52,94 @@ fn prepare() {
     });
 }
 
+async fn bench(io_type: IoType) {
+    let (is_read, is_seq) = match io_type {
+        IoType::SEQ_READ => (true, true),
+        IoType::SEQ_WRITE => (false, true),
+        IoType::RND_READ => (true, false),
+        IoType::RND_WRITE => (false, false),
+    };
+
+    let file = {
+        let path = format!("tmp.data.{}", 0).to_string();
+        let mut flags = libc::O_RDWR;
+        if USE_O_DIRECT {
+            flags |= libc::O_DIRECT;
+        }
+        let mode = 0;
+        AsyncFile::<Runtime>::open(path.clone(), flags, mode).unwrap()
+    };
+
+    let start = Instant::now();
+
+    let vec = vec![0; BLOCK_SIZE];
+    let mut buf = vec.into_boxed_slice();
+    for _ in 0..LOOPS {
+        if is_seq {
+            let mut offset = 0;
+            while offset < FILE_LEN {
+                if is_read {
+                    let nbytes = file.read_at(offset, &mut buf[..]).await.unwrap();
+                    assert!(nbytes > 0);
+                    offset += nbytes as usize;
+                } else {
+                    let val = buf[0] + 1;
+                    for col in 0..buf.len() {
+                        buf[col] = val;
+                    }
+
+                    let nbytes = file.write_at(offset, &buf[..]).await.unwrap();
+                    assert!(nbytes > 0);
+                    offset += nbytes;
+                }
+            }
+        } else {
+            unsafe {
+                SEED = 0;
+            }
+
+            let mut cnt = 0;
+            let block_num = FILE_LEN / BLOCK_SIZE;
+            while cnt < FILE_LEN {
+                let offset = (get_random() as usize % block_num) * BLOCK_SIZE;
+
+                if is_read {
+                    let nbytes = file.read_at(offset, &mut buf[..]).await.unwrap();
+                    assert!(nbytes > 0);
+                    cnt += nbytes as usize;
+                } else {
+                    let val = buf[0] + 1;
+                    for col in 0..buf.len() {
+                        buf[col] = val;
+                    }
+
+                    let nbytes = file.write_at(offset, &buf[..]).await.unwrap();
+                    assert!(nbytes > 0);
+                    cnt += nbytes;
+                }
+            }
+        }
+
+        if !is_read && USE_FLUSH {
+            file.flush().await.unwrap();
+        }
+    }
+
+    let duration = start.elapsed();
+    println!("async-file {:?} [cache_size: {} MB, file_size: {} MB, FILE_NUM: {}, BLOCK_SIZE: {}, LOOPS: {}, USE_FLUSH: {}, USE_O_DIRECT: {}] is: {:?}, throughput: {} Mb/s", 
+        io_type, CACHE_SIZE * 4096 / 1024 / 1024, FILE_LEN / 1024 / 1024, FILE_NUM, BLOCK_SIZE, LOOPS, USE_FLUSH, USE_O_DIRECT, duration, ((FILE_LEN * FILE_NUM * LOOPS) as f64 / 1024.0 / 1024.0) / (duration.as_millis() as f64 / 1000.0));
+
+    file.flush().await.unwrap();
+}
+
 fn test_read_write() {
     prepare();
 
-    async_rt::task::block_on(async {
-        let start = Instant::now();
+    async_rt::task::block_on(bench(IoType::RND_READ));
+    async_rt::task::block_on(bench(IoType::RND_WRITE));
 
-        let file = {
-            let path = format!("tmp.data.{}", 0).to_string();
-            let mut flags = libc::O_RDWR;
-            if USE_O_DIRECT {
-                flags |= libc::O_DIRECT;
-            }
-            let mode = 0;
-            AsyncFile::<Runtime>::open(path.clone(), flags, mode).unwrap()
-        };
-
-        let vec = vec![0; BLOCK_SIZE];
-        let mut buf = vec.into_boxed_slice();
-
-        for _ in 0..LOOPS {
-            let mut offset = 0;
-            while offset < FILE_LEN {
-                let val = buf[0] + 1;
-                for col in 0..buf.len() {
-                    buf[col] = val;
-                }
-
-                let retval = file.write_at(offset, &buf[..]).await.unwrap();
-                assert!(retval > 0);
-                offset += retval;
-            }
-
-            if USE_FLUSH {
-                file.flush().await.unwrap();
-            }
-        }
-
-        let duration = start.elapsed();
-        println!("async-file sequential write [cache_size: {} MB, file_size: {} MB, FILE_NUM: {}, BLOCK_SIZE: {}, USE_FLUSH: {}, USE_O_DIRECT: {}] is: {:?}, throughput: {} Mb/s", 
-            CACHE_SIZE * 4096 / 1024 / 1024, FILE_LEN / 1024 / 1024, FILE_NUM, BLOCK_SIZE, USE_FLUSH, USE_O_DIRECT, duration, ((FILE_LEN * FILE_NUM * LOOPS) as f64 / 1024.0 / 1024.0) / (duration.as_millis() as f64 / 1000.0));
-
-        file.flush().await.unwrap();
-        
-    });
-
-    async_rt::task::block_on(async {
-        let start = Instant::now();
-
-        let file = {
-            let path = format!("tmp.data.{}", 0).to_string();
-            let mut flags = libc::O_RDWR;
-            if USE_O_DIRECT {
-                flags |= libc::O_DIRECT;
-            }
-            let mode = 0;
-            AsyncFile::<Runtime>::open(path.clone(), flags, mode).unwrap()
-        };
-
-        let vec = vec![0; BLOCK_SIZE];
-        let mut buf = vec.into_boxed_slice();
-        for _ in 0..LOOPS {
-            let mut offset = 0;
-            while offset < FILE_LEN {
-                let nbytes = file.read_at(offset, &mut buf[..]).await.unwrap();
-                assert!(nbytes > 0);
-                offset += nbytes as usize;
-            }
-        }
-
-        let duration = start.elapsed();
-        println!("async-file sequential read [cache_size: {} MB, file_size: {} MB, FILE_NUM: {}, BLOCK_SIZE: {}, USE_FLUSH: {}, USE_O_DIRECT: {}] is: {:?}, throughput: {} Mb/s", 
-            CACHE_SIZE * 4096 / 1024 / 1024, FILE_LEN / 1024 / 1024, FILE_NUM, BLOCK_SIZE, USE_FLUSH, USE_O_DIRECT, duration, ((FILE_LEN * FILE_NUM * LOOPS) as f64 / 1024.0 / 1024.0) / (duration.as_millis() as f64 / 1000.0));
-    });
-
-    async_rt::task::block_on(async {
-        let start = Instant::now();
-
-        let file = {
-            let path = format!("tmp.data.{}", 0).to_string();
-            let mut flags = libc::O_RDWR;
-            if USE_O_DIRECT {
-                flags |= libc::O_DIRECT;
-            }
-            let mode = 0;
-            AsyncFile::<Runtime>::open(path.clone(), flags, mode).unwrap()
-        };
-
-        unsafe { SEED = 0; }
-
-        let vec = vec![0; BLOCK_SIZE];
-        let mut buf = vec.into_boxed_slice();
-
-        for _ in 0..LOOPS {
-            let mut cnt = 0;
-            let block_num = FILE_LEN / BLOCK_SIZE;
-            while cnt < FILE_LEN {
-                let offset = (get_random() as usize % block_num) * BLOCK_SIZE;
-
-                let val = buf[0] + 1;
-                for col in 0..buf.len() {
-                    buf[col] = val;
-                }
-
-                let retval = file.write_at(offset, &buf[..]).await.unwrap();
-                assert!(retval > 0);
-                cnt += retval;
-            }
-
-            if USE_FLUSH {
-                file.flush().await.unwrap();
-            }
-        }
-
-        let duration = start.elapsed();
-        println!("async-file random write [cache_size: {} MB, file_size: {} MB, FILE_NUM: {}, BLOCK_SIZE: {}, USE_FLUSH: {}, USE_O_DIRECT: {}] is: {:?}, throughput: {} Mb/s", 
-            CACHE_SIZE * 4096 / 1024 / 1024, FILE_LEN / 1024 / 1024, FILE_NUM, BLOCK_SIZE, USE_FLUSH, USE_O_DIRECT, duration, ((FILE_LEN * FILE_NUM * LOOPS) as f64 / 1024.0 / 1024.0) / (duration.as_millis() as f64 / 1000.0));
-
-        file.flush().await.unwrap();
-    });
-
-    async_rt::task::block_on(async {
-        let start = Instant::now();
-
-        let file = {
-            let path = format!("tmp.data.{}", 0).to_string();
-            let mut flags = libc::O_RDWR;
-            if USE_O_DIRECT {
-                flags |= libc::O_DIRECT;
-            }
-            let mode = 0;
-            AsyncFile::<Runtime>::open(path.clone(), flags, mode).unwrap()
-        };
-
-        unsafe { SEED = 0; }
-
-        let vec = vec![0; BLOCK_SIZE];
-        let mut buf = vec.into_boxed_slice();
-        for _ in 0..LOOPS {
-            let mut cnt = 0;
-            let block_num = FILE_LEN / BLOCK_SIZE;
-            while cnt < FILE_LEN {
-                let offset = (get_random() as usize % block_num) * BLOCK_SIZE;
-                let nbytes = file.read_at(offset, &mut buf[..]).await.unwrap();
-                assert!(nbytes > 0);
-                cnt += nbytes as usize;
-            }
-        }
-
-        let duration = start.elapsed();
-        println!("async-file random read [cache_size: {} MB, file_size: {} MB, FILE_NUM: {}, BLOCK_SIZE: {}, USE_FLUSH: {}, USE_O_DIRECT: {}] is: {:?}, throughput: {} Mb/s", 
-            CACHE_SIZE * 4096 / 1024 / 1024, FILE_LEN / 1024 / 1024, FILE_NUM, BLOCK_SIZE, USE_FLUSH, USE_O_DIRECT, duration, ((FILE_LEN * FILE_NUM * LOOPS) as f64 / 1024.0 / 1024.0) / (duration.as_millis() as f64 / 1000.0));
-    });
+    async_rt::task::block_on(bench(IoType::SEQ_READ));
+    async_rt::task::block_on(bench(IoType::SEQ_WRITE));
 }
 
 mod runtime {
