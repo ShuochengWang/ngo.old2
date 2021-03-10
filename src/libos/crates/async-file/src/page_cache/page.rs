@@ -1,10 +1,12 @@
+use std::alloc::{alloc, dealloc, Layout};
 use std::cell::UnsafeCell;
 #[cfg(feature = "sgx")]
 use std::prelude::v1::*;
 
 pub struct Page {
     // TODO: for SGX, this buffer needs to be allocated from a different source.
-    buf: UnsafeCell<Vec<u8>>,
+    // buf: UnsafeCell<Vec<u8>>,
+    buf: UnsafeCell<*mut u8>,
 }
 
 unsafe impl Send for Page {}
@@ -12,7 +14,10 @@ unsafe impl Sync for Page {}
 
 impl Page {
     pub fn new() -> Self {
-        let buf = UnsafeCell::new(Vec::with_capacity(Page::size()));
+        // let buf = UnsafeCell::new(Vec::with_capacity(Page::size()));
+        let buf = UnsafeCell::new(unsafe {
+            alloc(Layout::from_size_align_unchecked(Page::size(), 4096))
+        });
         Self { buf }
     }
 
@@ -25,17 +30,28 @@ impl Page {
     }
 
     pub fn as_ptr(&self) -> *const u8 {
-        let buf = unsafe { &*self.buf.get() };
-        buf.as_ptr()
+        // let buf = unsafe { &*self.buf.get() };
+        // buf.as_ptr()
+        unsafe { *self.buf.get() }
     }
 
     pub fn as_mut_ptr(&self) -> *mut u8 {
-        let buf = unsafe { &mut *self.buf.get() };
-        buf.as_mut_ptr()
+        // let buf = unsafe { &mut *self.buf.get() };
+        // buf.as_mut_ptr()
+        unsafe { *self.buf.get() }
     }
 
     pub const fn size() -> usize {
         4096
+    }
+}
+
+impl Drop for Page {
+    fn drop(&mut self) {
+        unsafe {
+            let layout = Layout::from_size_align_unchecked(Page::size(), 4096);
+            dealloc(*self.buf.get(), layout);
+        }
     }
 }
 
