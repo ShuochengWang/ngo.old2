@@ -249,15 +249,16 @@ impl<Rt: AsyncFileRt + ?Sized> AsyncFile<Rt> {
         let buf = &mut buf[..buf_len];
 
         // Use tracker to determine if the new read is sequential and how much data to prefetch.
-        let mut tracker = self.seq_rd_tracker.try_lock().ok();
-        let new_read = tracker
-            .as_mut()
-            .map(|tracker| tracker.track(offset, buf.len()));
-        let prefetch_len = {
-            let prefetch_len = new_read.as_ref().map_or(0, |seq_rd| seq_rd.prefetch_size());
-            let max_prefetch_len = file_remaining - buf.len();
-            prefetch_len.min(max_prefetch_len)
-        };
+        // let mut tracker = self.seq_rd_tracker.try_lock().ok();
+        // let new_read = tracker
+        //     .as_mut()
+        //     .map(|tracker| tracker.track(offset, buf.len()));
+        // let prefetch_len = {
+        //     let prefetch_len = new_read.as_ref().map_or(0, |seq_rd| seq_rd.prefetch_size());
+        //     let max_prefetch_len = file_remaining - buf.len();
+        //     prefetch_len.min(max_prefetch_len)
+        // };
+        let prefetch_len = 0;
 
         // Fetch the data to the page cache and copy the data of the first ready pages
         // in the page cache to the output buffer.
@@ -277,7 +278,7 @@ impl<Rt: AsyncFileRt + ?Sized> AsyncFile<Rt> {
         });
 
         if read_nbytes > 0 {
-            new_read.map(|new_read| new_read.complete(read_nbytes));
+            // new_read.map(|new_read| new_read.complete(read_nbytes));
             Ok(read_nbytes)
         } else {
             return_errno!(EAGAIN, "try again later");
