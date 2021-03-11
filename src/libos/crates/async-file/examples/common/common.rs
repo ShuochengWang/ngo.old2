@@ -74,6 +74,9 @@ async fn bench(io_type: IoType) {
 
     let vec = vec![0; BLOCK_SIZE];
     let mut buf = vec.into_boxed_slice();
+    unsafe {
+        SEED = 0;
+    }
     for _ in 0..LOOPS {
         if is_seq {
             let mut offset = 0;
@@ -94,10 +97,6 @@ async fn bench(io_type: IoType) {
                 }
             }
         } else {
-            unsafe {
-                SEED = 0;
-            }
-
             let mut cnt = 0;
             let block_num = FILE_LEN / BLOCK_SIZE;
             while cnt < FILE_LEN {
