@@ -2,14 +2,13 @@ use self::runtime::Runtime;
 use async_file::*;
 use std::time::Instant;
 
-const CACHE_SIZE: usize = 1024 * 50; // 4 MB * 50
-// const CACHE_SIZE: usize = 100;
+static mut BLOCK_SIZE: usize = 4096 * 1;
+const CACHE_SIZE: usize = 1024 * 50; // 1024 * 50: 4 MB * 50 (cache hit), or 10 (cache miss)
 const FILE_LEN: usize = 1024 * 1024 * 100;
 const FILE_NUM: usize = 1;
-const BLOCK_SIZE: usize = 4096 * 8;
-const LOOPS: usize = 100;
+const LOOPS: usize = 1;
 const USE_FLUSH: bool = false;
-const USE_O_DIRECT: bool = false;
+const USE_O_DIRECT: bool = true;
 
 #[derive(Debug)]
 enum IoType {
@@ -39,7 +38,7 @@ fn prepare() {
             AsyncFile::<Runtime>::open(path.clone(), flags, mode).unwrap()
         };
 
-        let vec = vec![0; BLOCK_SIZE];
+        let vec = vec![0; 4096];
         let buf = vec.into_boxed_slice();
 
         let mut offset = 0;
@@ -53,6 +52,7 @@ fn prepare() {
 }
 
 async fn bench(io_type: IoType) {
+    let block_size = unsafe { BLOCK_SIZE };
     let (is_read, is_seq) = match io_type {
         IoType::SEQ_READ => (true, true),
         IoType::SEQ_WRITE => (false, true),
@@ -72,7 +72,7 @@ async fn bench(io_type: IoType) {
 
     let start = Instant::now();
 
-    let vec = vec![0; BLOCK_SIZE];
+    let vec = vec![0; block_size];
     let mut buf = vec.into_boxed_slice();
     unsafe {
         SEED = 0;
@@ -98,9 +98,9 @@ async fn bench(io_type: IoType) {
             }
         } else {
             let mut cnt = 0;
-            let block_num = FILE_LEN / BLOCK_SIZE;
+            let block_num = FILE_LEN / block_size;
             while cnt < FILE_LEN {
-                let offset = (get_random() as usize % block_num) * BLOCK_SIZE;
+                let offset = (get_random() as usize % block_num) * block_size;
 
                 if is_read {
                     let nbytes = file.read_at(offset, &mut buf[..]).await.unwrap();
@@ -126,7 +126,7 @@ async fn bench(io_type: IoType) {
 
     let duration = start.elapsed();
     println!("async-file {:?} [cache_size: {} MB, file_size: {} MB, FILE_NUM: {}, BLOCK_SIZE: {}, LOOPS: {}, USE_FLUSH: {}, USE_O_DIRECT: {}] is: {:?}, throughput: {} Mb/s", 
-        io_type, CACHE_SIZE * 4096 / 1024 / 1024, FILE_LEN / 1024 / 1024, FILE_NUM, BLOCK_SIZE, LOOPS, USE_FLUSH, USE_O_DIRECT, duration, ((FILE_LEN * FILE_NUM * LOOPS) as f64 / 1024.0 / 1024.0) / (duration.as_millis() as f64 / 1000.0));
+        io_type, CACHE_SIZE * 4096 / 1024 / 1024, FILE_LEN / 1024 / 1024, FILE_NUM, block_size, LOOPS, USE_FLUSH, USE_O_DIRECT, duration, ((FILE_LEN * FILE_NUM * LOOPS) as f64 / 1024.0 / 1024.0) / (duration.as_millis() as f64 / 1000.0));
 
     file.flush().await.unwrap();
 }
@@ -134,11 +134,21 @@ async fn bench(io_type: IoType) {
 fn test_read_write() {
     prepare();
 
-    async_rt::task::block_on(bench(IoType::RND_READ));
-    async_rt::task::block_on(bench(IoType::RND_WRITE));
+    use std::{thread, time};
+    let sleep_time = time::Duration::from_millis(2000);
 
-    async_rt::task::block_on(bench(IoType::SEQ_READ));
-    async_rt::task::block_on(bench(IoType::SEQ_WRITE));
+    for i in 1..9 {
+        unsafe {
+            BLOCK_SIZE = 4096 * i;
+        }
+
+        async_rt::task::block_on(bench(IoType::RND_READ));
+        // async_rt::task::block_on(bench(IoType::RND_WRITE));
+        // async_rt::task::block_on(bench(IoType::SEQ_READ));
+        // async_rt::task::block_on(bench(IoType::SEQ_WRITE));
+
+        thread::sleep(sleep_time);
+    }
 }
 
 mod runtime {
@@ -151,16 +161,17 @@ mod runtime {
 
     pub struct Runtime;
 
+    pub const IO_URING_SIZE: usize = 10240;
     pub const PAGE_CACHE_SIZE: usize = CACHE_SIZE;
     pub const DIRTY_LOW_MARK: usize = PAGE_CACHE_SIZE / 10 * 3;
     pub const DIRTY_HIGH_MARK: usize = PAGE_CACHE_SIZE / 10 * 7;
-    pub const MAX_DIRTY_PAGES_PER_FLUSH: usize = PAGE_CACHE_SIZE / 10;
+    pub const MAX_DIRTY_PAGES_PER_FLUSH: usize = IO_URING_SIZE / 10;
 
     lazy_static! {
         static ref PAGE_CACHE: PageCache = PageCache::with_capacity(PAGE_CACHE_SIZE);
         static ref FLUSHER: Flusher<Runtime> = Flusher::new();
         static ref WAITER_QUEUE: WaiterQueue = WaiterQueue::new();
-        pub static ref RING: IoUring = Builder::new().build(10240).unwrap();
+        pub static ref RING: IoUring = Builder::new().build(IO_URING_SIZE as u32).unwrap();
     }
 
     impl AsyncFileRt for Runtime {

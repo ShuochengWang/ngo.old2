@@ -48,7 +48,7 @@ impl UntrustedAllocator {
 
         static INIT: Once = Once::new();
         INIT.call_once(|| {
-            let size = 1024 * 1024 * 512;
+            let size = 1024 * 1024 * 1024;
             let heap_ptr = unsafe { libc::ocall::malloc(size) };
             assert!(!heap_ptr.is_null());
             unsafe {
